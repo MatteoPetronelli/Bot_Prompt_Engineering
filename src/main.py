@@ -5,8 +5,9 @@ import google.generativeai as genai
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Import des structures manuelles (Assure-toi que data_structures.py est dans le même dossier)
+# --- IMPORTS LOCAUX ---
 from data_structures import CommandHistory, DialogueTree, TreeNode
+from utils import save_game_data, load_game_data, sanitize_filename
 
 # --- 1. CONFIGURATION & SÉCURITÉ ---
 
@@ -21,6 +22,8 @@ if not DISCORD_TOKEN or not GEMINI_KEY:
 
 # Configuration de Gemini
 genai.configure(api_key=GEMINI_KEY)
+# Note: Si 'gemini-3-pro-preview' ne fonctionne pas encore sur ton compte, 
+# remplace par 'gemini-1.5-pro-latest'
 model = genai.GenerativeModel('gemini-3-pro-preview')
 
 # Configuration du Bot Discord
@@ -28,40 +31,11 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- 2. ÉTAT GLOBAL & PERSISTANCE ---
-
-DATA_FILE = "data/bot_data.json"
+# --- 2. ÉTAT GLOBAL (Mémoire vive) ---
 
 # Instanciation des structures manuelles
 global_history = CommandHistory() # Liste chaînée pour l'historique
 active_trees = {} # Dictionnaire {user_id: DialogueTree}
-
-def save_data():
-    """Sauvegarde l'historique dans un fichier JSON."""
-    data_to_save = {
-        "history": global_history.to_list_dict()
-    }
-    
-    # Création du dossier data s'il n'existe pas
-    if not os.path.exists('data'):
-        os.makedirs('data')
-        
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-    print("💾 Données sauvegardées avec succès.")
-
-def load_data():
-    """Charge l'historique au démarrage."""
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Reconstruction de la liste chaînée
-                for item in data.get("history", []):
-                    global_history.add(item['cmd'], item['user'])
-            print("📂 Données chargées avec succès.")
-        except Exception as e:
-            print(f"⚠️ Erreur lors du chargement des données : {e}")
 
 # --- 3. LOGIQUE IA (Cerveau du Bot) ---
 
@@ -74,27 +48,27 @@ async def generate_next_step(ctx, tree, user_input):
     """
     
     system_instruction = """
-    Tu es un "Prompt Architect" expert. Ton but est d'aider l'utilisateur à construire un prompt parfait.
+    Tu es un "Prompt Architect" expert. Ton but est d'aider l'utilisateur à construire un prompt parfait pour une IA générative.
     Analyse la réponse de l'utilisateur.
     
     Règles :
-    1. Si le prompt manque de détails (Contexte, Format, Style), pose une question binaire ou ouverte pour préciser.
-    2. Si tu as assez d'infos, génère le prompt final.
+    1. Si le prompt manque de détails (Contexte, Format, Style, Contraintes), pose une question pertinente pour préciser.
+    2. Si tu as assez d'infos, génère le prompt final optimisé (en Anglais ou Français selon la demande).
     
     Format de réponse STRICTEMENT JSON :
     {
         "type": "question" OU "conclusion",
         "content": "Le texte de la question ou le prompt final",
-        "summary": "Résumé très court de la question (ex: 'Demande du style')"
+        "summary": "Résumé très court (ex: 'Choix du style')"
     }
     """
     
     # Construction du prompt pour l'IA
-    full_prompt = f"{system_instruction}\n\nContexte actuel : {tree.current_node.question}\nRéponse utilisateur : {user_input}"
+    full_prompt = f"{system_instruction}\n\nContexte actuel (Question précédente) : {tree.current_node.question}\nRéponse utilisateur : {user_input}"
     
     try:
         response = model.generate_content(full_prompt)
-        # Nettoyage du JSON (au cas où l'IA met des balises markdown)
+        # Nettoyage du JSON (au cas où l'IA met des balises markdown ```json ... ```)
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
         ai_data = json.loads(clean_text)
         
@@ -102,7 +76,7 @@ async def generate_next_step(ctx, tree, user_input):
         new_node = TreeNode(question=ai_data['content'])
         
         if ai_data['type'] == 'question':
-            # On ajoute un noeud enfant à gauche (chemin par défaut)
+            # On ajoute un noeud enfant à gauche (notre arbre grandit dynamiquement)
             tree.current_node.left = new_node
             tree.current_node = new_node # On avance le pointeur
             await ctx.send(f"🤖 **Question :** {ai_data['content']}")
@@ -117,19 +91,22 @@ async def generate_next_step(ctx, tree, user_input):
             await ctx.send("Tapez `!export` pour télécharger ce résultat ou `!reset` pour recommencer.")
 
     except Exception as e:
-        await ctx.send(f"⚠️ Erreur IA : {e}")
+        await ctx.send(f"⚠️ Erreur IA ou JSON malformé : {e}")
         print(f"Erreur complete: {e}")
 
 # --- 4. ÉVÉNEMENTS DISCORD ---
 
 @bot.event
 async def on_ready():
-    load_data()
-    print(f'✅ Connecté en tant que {bot.user}')
+    # Chargement via utils.py
+    load_game_data(global_history)
+    print(f'✅ Connecté en tant que {bot.user} - Modèle : {model.model_name}')
 
 @bot.event
 async def on_disconnect():
-    save_data()
+    # Sauvegarde via utils.py
+    save_game_data(global_history)
+    print("🔌 Déconnexion détectée, sauvegarde effectuée.")
 
 @bot.event
 async def on_message(message):
@@ -157,8 +134,6 @@ async def on_message(message):
                 await generate_next_step(await bot.get_context(message), tree, message.content)
             return
 
-    # Si aucun cas ne correspond, on laisse faire (ou on ignore)
-
 # --- 5. COMMANDES DE DISCUSSION (ARBRE) ---
 
 @bot.command()
@@ -183,7 +158,8 @@ async def reset(ctx):
     if ctx.author.id in active_trees:
         active_trees[ctx.author.id].reset()
         await ctx.send("🔄 Retour à la racine de l'arbre.")
-        # On pourrait relancer la première question ici si on stockait le prompt initial
+        # Note : Pour relancer vraiment l'IA, il faudrait stocker le prompt initial, 
+        # ici on reset juste le pointeur.
     else:
         await ctx.send("❌ Pas de session active.")
 
@@ -208,7 +184,10 @@ async def my_history(ctx):
     """Affiche tout l'historique de l'utilisateur."""
     cmds = global_history.get_all(ctx.author.id)
     if cmds:
-        await ctx.send(f"📜 **Vos commandes :**\n" + "\n".join(cmds))
+        # On tronque si c'est trop long pour Discord (limite 2000 chars)
+        msg = "📜 **Vos commandes :**\n" + "\n".join(cmds)
+        if len(msg) > 1900: msg = msg[:1900] + "... (tronqué)"
+        await ctx.send(msg)
     else:
         await ctx.send("📭 Historique vide.")
 
@@ -240,12 +219,15 @@ async def export(ctx):
     if not tree.current_node.is_conclusion:
         return await ctx.send("⚠️ Finissez la discussion d'abord !")
         
-    filename = f"prompt_{ctx.author.id}.txt"
+    # Utilisation de sanitize_filename depuis utils.py
+    safe_name = sanitize_filename(f"prompt_{ctx.author.name}")
+    filename = f"{safe_name}.txt"
+    
     with open(filename, "w", encoding='utf-8') as f:
         f.write(tree.current_node.question) # Le noeud conclusion contient le prompt
         
     await ctx.send("📁 Voici votre fichier :", file=discord.File(filename))
-    os.remove(filename) # Nettoyage
+    os.remove(filename) # Nettoyage du fichier temporaire
 
 # Bonus 2 : Visualisation du chemin (Path)
 @bot.command()
@@ -261,11 +243,10 @@ async def path(ctx):
     # Parcours manuel simple depuis la racine
     while node:
         label = "🏁 Conclusion" if node.is_conclusion else "❓ Question"
-        content = (node.question[:40] + '...') if len(node.question) > 40 else node.question
+        # On coupe le texte s'il est trop long
+        content = (node.question[:50] + '...') if len(node.question) > 50 else node.question
         path_str += f"⬇️ [{label}] {content}\n"
         
-        # Dans cette implémentation simplifiée, on suit toujours 'left' car 
-        # l'IA génère le chemin linéairement pour l'instant
         node = node.left 
         
     await ctx.send(f"```{path_str}```")
@@ -275,8 +256,7 @@ async def path(ctx):
 async def status(ctx):
     """Affiche l'état de santé du bot."""
     active_users = len(active_trees)
-    # On pourrait ajouter la latence ou la mémoire ici
-    await ctx.send(f"🟢 **Bot en ligne**\nSessions actives : {active_users}\nModèle IA : Gemini 1.5 Flash")
+    await ctx.send(f"🟢 **Bot en ligne**\nSessions actives : {active_users}\nModèle IA : Gemini 3.0 Pro (Preview)")
 
 # Lancement
 bot.run(DISCORD_TOKEN)

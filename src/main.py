@@ -165,20 +165,30 @@ async def prompt(ctx, *, initial_idea):
 
 @bot.command()
 async def reset(ctx):
+    """Supprime complètement la session en cours."""
     if ctx.author.id in active_trees:
-        active_trees[ctx.author.id].reset()
-        await ctx.send("🔄 Reset effectué.")
+        del active_trees[ctx.author.id]
+        await ctx.send("🗑️ **Session effacée.** Tout est oublié. Tapez `!prompt` pour recommencer.")
     else:
-        await ctx.send("❌ Pas de session.")
+        await ctx.send("❌ Aucune session à effacer.")
 
-@bot.command()
-async def speak_about(ctx, *, topic):
+@bot.command(name="speak")
+async def speak(ctx, *, topic):
+    """Permet de taper '!speak about X' ou '!speak X'."""
+    
+    if topic.lower().startswith("about "):
+        topic = topic[6:] # Coupe les 6 premiers caractères ("about ")
+
     if ctx.author.id in active_trees:
         tree = active_trees[ctx.author.id]
         found = tree.search_topic(topic)
-        await ctx.send(f"Sujet '{topic}' trouvé ? -> {'Oui' if found else 'Non'}")
+        
+        if found:
+             await ctx.send(f"✅ Oui, nous avons parlé de **{topic}**.")
+        else:
+             await ctx.send(f"❌ Non, **{topic}** n'a pas été mentionné.")
     else:
-        await ctx.send("❌ Pas de session.")
+        await ctx.send("❌ Pas de session active.")
 
 @bot.command()
 async def my_history(ctx):
@@ -190,10 +200,22 @@ async def my_history(ctx):
     else:
         await ctx.send("📭 Vide.")
 
-@bot.command()
+@bot.command(aliases=['last'])
+@bot.command(aliases=['last'])
 async def last_cmd(ctx):
-    cmd = global_history.get_last(ctx.author.id)
-    await ctx.send(f"🔙 `{cmd}`" if cmd else "📭 Vide")
+    """Affiche la commande précédente (en ignorant la commande actuelle)."""
+    
+    # On récupère tout l'historique de l'utilisateur sous forme de liste
+    cmds = global_history.get_all(ctx.author.id)
+    
+    # On a besoin d'au moins 2 éléments pour avoir un "avant-dernier"
+    if len(cmds) >= 2:
+        # On prend l'élément à l'index -2 (l'avant-dernier)
+        previous_cmd = cmds[-2]
+        await ctx.send(f"🔙 **Commande précédente :** `{previous_cmd}`")
+    else:
+        # S'il n'y a que ["!last"], c'est qu'il n'y a pas d'historique avant
+        await ctx.send("📭 Pas d'historique avant cette commande.")
 
 @bot.command()
 async def clear_history(ctx):

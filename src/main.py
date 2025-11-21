@@ -201,7 +201,6 @@ async def my_history(ctx):
         await ctx.send("📭 Vide.")
 
 @bot.command(aliases=['last'])
-@bot.command(aliases=['last'])
 async def last_cmd(ctx):
     """Affiche la commande précédente (en ignorant la commande actuelle)."""
     

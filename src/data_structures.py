@@ -1,6 +1,7 @@
-# data_structures.py
+# ==========================================
+# PARTIE 1 : LISTE CHAÎNÉE (Historique)
+# ==========================================
 
-# --- STRUCTURE 1 : LISTE CHAÎNÉE (Pour l'historique des commandes) ---
 class HistoryNode:
     def __init__(self, command, author_id):
         self.command = command
@@ -10,7 +11,7 @@ class HistoryNode:
 class CommandHistory:
     def __init__(self):
         self.head = None
-        self.tail = None # Optimisation pour ajout rapide à la fin
+        self.tail = None
 
     def add(self, command, author_id):
         new_node = HistoryNode(command, author_id)
@@ -22,78 +23,114 @@ class CommandHistory:
             self.tail = new_node
 
     def get_last(self, author_id):
-        # Parcours pour trouver le dernier (complexité O(n) car liste simple)
         current = self.head
-        last_cmd = None
-        while current:
+        last_found = None
+        while current is not None:
             if current.author_id == author_id:
-                last_cmd = current.command
+                last_found = current.command
             current = current.next
-        return last_cmd
+        return last_found
 
     def get_all(self, author_id):
-        # Retourne une liste python juste pour l'affichage
-        cmds = []
+        result = []
         current = self.head
-        while current:
+        while current is not None:
             if current.author_id == author_id:
-                cmds.append(current.command)
+                result.append(current.command)
             current = current.next
-        return cmds
+        return result
 
     def clear(self):
         self.head = None
         self.tail = None
 
-    # Pour la sauvegarde JSON
     def to_list_dict(self):
         data = []
         current = self.head
-        while current:
+        while current is not None:
             data.append({"cmd": current.command, "user": current.author_id})
             current = current.next
         return data
 
-# --- STRUCTURE 2 : ARBRE BINAIRE DYNAMIQUE (Pour la discussion) ---
-class TreeNode:
-    def __init__(self, question, is_root=False):
-        self.question = question      # La question posée par le bot
-        self.user_answer = None       # La réponse donnée par l'user pour arriver ici
-        self.left = None              # Branche "Non" ou "Option A"
-        self.right = None             # Branche "Oui" ou "Option B"
-        self.is_conclusion = False    # Si True, c'est le résultat final
 
+# ==========================================
+# PARTIE 2 : ARBRE BINAIRE (Sessions)
+# ==========================================
+
+class TreeNode:
+    def __init__(self, question, is_conclusion=False):
+        self.question = question
+        self.user_answer = None
+        self.left = None
+        self.right = None
+        self.is_conclusion = is_conclusion
+
+    # --- SÉRIALISATION (Sauvegarde) ---
     def to_dict(self):
-        # Récursif pour le JSON
+        """Transforme le noeud et ses enfants en dictionnaire récursif."""
         return {
-            "question": self.question,
-            "answer": self.user_answer,
-            "left": self.left.to_dict() if self.left else None,
-            "right": self.right.to_dict() if self.right else None,
-            "is_conclusion": self.is_conclusion
+            "q": self.question,
+            "a": self.user_answer,
+            "end": self.is_conclusion,
+            "l": self.left.to_dict() if self.left else None,
+            "r": self.right.to_dict() if self.right else None
         }
+
+    # --- DÉSÉRIALISATION (Chargement) ---
+    @staticmethod
+    def from_dict(data):
+        """Reconstruit un noeud (et ses enfants) depuis un dictionnaire."""
+        if not data:
+            return None
+        
+        node = TreeNode(data["q"], is_conclusion=data["end"])
+        node.user_answer = data["a"]
+        
+        if data["l"]:
+            node.left = TreeNode.from_dict(data["l"])
+        if data["r"]:
+            node.right = TreeNode.from_dict(data["r"])
+            
+        return node
 
 class DialogueTree:
     def __init__(self):
         self.root = None
-        self.current_node = None # Pointeur vers où en est l'utilisateur
+        self.current_node = None
 
     def reset(self):
         self.current_node = self.root
 
-    # Fonctionnalité demandée : "speak about X" (Recherche dans l'arbre)
-    def search_topic(self, topic, node=None):
-        if node is None:
-            node = self.root
-        if node is None:
-            return False
+    def search_topic(self, keyword):
+        return self._search_recursive(self.root, keyword.lower())
 
-        # Vérifie si le sujet est dans la question ou la réponse stockée
-        if topic.lower() in node.question.lower() or (node.user_answer and topic.lower() in node.user_answer.lower()):
-            return True
-        
-        # Recherche récursive à gauche puis à droite
-        found_left = self.search_topic(topic, node.left)
-        if found_left: return True
-        
-        return self.search_topic(topic, node.right)
+    def _search_recursive(self, node, keyword):
+        if node is None: return False
+        node_text = node.question.lower()
+        user_text = node.user_answer.lower() if node.user_answer else ""
+        if keyword in node_text or keyword in user_text: return True
+        return self._search_recursive(node.left, keyword) or self._search_recursive(node.right, keyword)
+
+    # --- SÉRIALISATION ---
+    def to_dict(self):
+        """Sauvegarde tout l'arbre."""
+        if not self.root:
+            return None
+        return self.root.to_dict()
+
+    # --- DÉSÉRIALISATION ---
+    @staticmethod
+    def from_dict(data):
+        """Recrée un DialogueTree complet depuis les données."""
+        if not data:
+            return None
+            
+        new_tree = DialogueTree()
+        new_tree.root = TreeNode.from_dict(data)
+
+        pointer = new_tree.root
+        while pointer.left:
+            pointer = pointer.left
+            
+        new_tree.current_node = pointer
+        return new_tree

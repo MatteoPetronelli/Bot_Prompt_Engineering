@@ -2,8 +2,9 @@ import discord
 import os
 import json
 from discord.ext import commands
+from discord import app_commands
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI 
 
 # --- IMPORTS LOCAUX ---
 from data_structures import CommandHistory, DialogueTree, TreeNode
@@ -18,14 +19,8 @@ LM_STUDIO_URL = os.getenv('LM_STUDIO_URL', "http://localhost:1234/v1")
 if not DISCORD_TOKEN:
     raise ValueError("ERREUR : Token Discord manquant dans le fichier .env")
 
-# Configuration du client pour LM Studio
-# LM Studio imite l'API d'OpenAI, donc on utilise ce client
-client = OpenAI(
-    base_url=LM_STUDIO_URL,
-    api_key="lm-studio" # Clé factice requise par la librairie
-)
+client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
 
-# Configuration Discord
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -36,72 +31,56 @@ active_trees = {}
 
 # --- 3. LOGIQUE IA (LOCALE) ---
 
-async def generate_next_step(ctx, tree, user_input):
+async def generate_next_step(interaction_or_ctx, tree, user_input):
     """
-    Fonction connectée à LM Studio.
+    Gère la logique IA. 
+    Accepte soit un Context (message texte) soit une Interaction (slash command).
     """
     
-    # C'est le prompt STRICT que tu as validé lors du crash test
+    async def send_msg(text=None, embed=None):
+        if isinstance(interaction_or_ctx, discord.Interaction):
+            await interaction_or_ctx.followup.send(content=text, embed=embed)
+        else:
+            await interaction_or_ctx.send(content=text, embed=embed)
+
     system_instruction = """
     Tu es un architecte de prompt expert.
     Ton but : Construire le prompt parfait pour une IA générative.
-    
     Règles :
-    1. Analyse la réponse de l'utilisateur par rapport au contexte.
-    2. Si flou -> Pose une question de clarification.
-    3. Si clair -> Génère le prompt final.
-    
-    FORMAT DE RÉPONSE OBLIGATOIRE (JSON RAW) :
-    {
-        "type": "question" OU "conclusion",
-        "content": "Texte de la question ou du prompt final",
-        "summary": "Résumé court"
-    }
-    IMPORTANT :
-    - NE DIS RIEN D'AUTRE.
-    - PAS DE PHRASE D'INTRO ("Voici le JSON...").
-    - PAS DE MARKDOWN (Pas de ```json ... ```).
-    - JUSTE L'OBJET JSON BRUT.
+    1. Si flou -> Pose une question de clarification.
+    2. Si clair -> Génère le prompt final.
+    FORMAT JSON OBLIGATOIRE :
+    { "type": "question" OU "conclusion", "content": "Texte", "summary": "Résumé" }
+    IMPORTANT : PAS DE MARKDOWN, JUSTE LE JSON BRUT.
     """
     
-    # Construction de l'historique court pour le modèle local
     messages = [
         {"role": "system", "content": system_instruction},
-        {"role": "user", "content": f"Question précédente du bot : {tree.current_node.question}"},
+        {"role": "user", "content": f"Question précédente : {tree.current_node.question}"},
         {"role": "user", "content": f"Réponse utilisateur : {user_input}"}
     ]
     
     try:
-        # Appel à LM Studio
         response = client.chat.completions.create(
-            model="local-model", # LM Studio utilise le modèle chargé, ce nom importe peu
-            messages=messages,
-            temperature=0.3, # Température basse pour forcer le respect du JSON
-            max_tokens=500
+            model="local-model", messages=messages, temperature=0.3, max_tokens=500
         )
         
         raw_content = response.choices[0].message.content.strip()
-        
-        # --- NETTOYAGE DU JSON (Sécurité Anti-Bug pour la démo) ---
-        # Même si le modèle bave un peu, on extrait ce qui est entre { et }
         start_idx = raw_content.find('{')
         end_idx = raw_content.rfind('}') + 1
         
         if start_idx != -1 and end_idx != -1:
-            json_str = raw_content[start_idx:end_idx]
-            ai_data = json.loads(json_str)
+            ai_data = json.loads(raw_content[start_idx:end_idx])
         else:
-            # Fallback critique si vraiment pas de JSON (très rare avec ton test)
-            print(f"ERREUR JSON BRUT : {raw_content}")
-            raise ValueError("Le modèle n'a pas renvoyé de structure JSON détectable.")
+            print(f"ERREUR JSON : {raw_content}")
+            raise ValueError("JSON non détecté.")
 
-        # --- MISE À JOUR DE L'ARBRE ---
         new_node = TreeNode(question=ai_data['content'])
         
         if ai_data['type'] == 'question':
             tree.current_node.left = new_node
             tree.current_node = new_node
-            await ctx.send(f"🤖 **Question :** {ai_data['content']}")
+            await send_msg(text=f"🤖 **Question :** {ai_data['content']}")
             
         elif ai_data['type'] == 'conclusion':
             new_node.is_conclusion = True
@@ -109,135 +88,150 @@ async def generate_next_step(ctx, tree, user_input):
             tree.current_node = new_node
             
             embed = discord.Embed(title="✨ Prompt Final", description=ai_data['content'], color=0x00ff00)
-            await ctx.send(embed=embed)
-            await ctx.send("Tapez `!export` pour télécharger ce résultat.")
+            await send_msg(embed=embed)
+            await send_msg(text="Utilisez `/export` pour télécharger le fichier.")
 
     except Exception as e:
         print(f"⚠️ Erreur : {e}")
-        # En démo, mieux vaut dire qu'il y a une erreur plutôt que de planter silencieusement
-        await ctx.send(f"⚠️ Petite erreur technique de l'IA ({e}). Essaie de reformuler ta réponse.")
+        await send_msg(text=f"⚠️ Erreur technique IA ({e}).")
 
-# --- 4. ÉVÉNEMENTS DISCORD ---
+# --- 4. ÉVÉNEMENTS DISCORD & SYNC ---
 
 @bot.event
 async def on_ready():
-    load_game_data(global_history)
+    load_game_data(global_history, active_trees)
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Slash Commands synchronisées : {len(synced)} commandes.")
+    except Exception as e:
+        print(f"❌ Erreur de sync : {e}")
+
     print(f'✅ Connecté en tant que {bot.user}')
-    print(f'📡 Prêt à communiquer avec LM Studio sur {LM_STUDIO_URL}')
+    print(f'📡 LM Studio : {LM_STUDIO_URL}')
 
 @bot.event
 async def on_disconnect():
-    save_game_data(global_history)
-    print("🔌 Déconnexion - Sauvegarde effectuée.")
+    save_game_data(global_history, active_trees)
+    print("🔌 Sauvegarde effectuée.")
 
 @bot.event
 async def on_message(message):
     if message.author.bot: return
 
-    # Historique global des commandes
-    if message.content.startswith("!"):
-        global_history.add(message.content, message.author.id)
-        await bot.process_commands(message)
-        return
-
-    # Discussion active dans l'arbre
     if message.author.id in active_trees:
         tree = active_trees[message.author.id]
         if tree.current_node and not tree.current_node.is_conclusion:
-            async with message.channel.typing():
-                tree.current_node.user_answer = message.content
-                await generate_next_step(await bot.get_context(message), tree, message.content)
-            return
+            if not message.content.startswith(("/", "!")):
+                async with message.channel.typing():
+                    tree.current_node.user_answer = message.content
+                    await generate_next_step(message.channel, tree, message.content)
+                return
 
-# --- 5. COMMANDES ---
+    await bot.process_commands(message)
 
-@bot.command()
-async def prompt(ctx, *, initial_idea):
-    """Lance la démo."""
+# --- 5. SLASH COMMANDS (Le Cœur du Changement) ---
+
+@bot.tree.command(name="prompt", description="Démarrer une session d'Architecte de Prompt")
+@app_commands.describe(idee="Votre idée de base (ex: Une affiche de concert)")
+async def prompt(interaction: discord.Interaction, idee: str):
+    await interaction.response.defer()
+    
+    global_history.add(f"/prompt {idee}", interaction.user.id)
+    
     new_tree = DialogueTree()
-    new_tree.root = TreeNode(question=f"Sujet initial : {initial_idea}")
+    new_tree.root = TreeNode(question=f"Sujet initial : {idee}")
     new_tree.current_node = new_tree.root
-    active_trees[ctx.author.id] = new_tree
+    active_trees[interaction.user.id] = new_tree
     
-    await ctx.send(f"🏗️ **Architecte Local initialisé pour :** *{initial_idea}*")
-    async with ctx.channel.typing():
-        await generate_next_step(ctx, new_tree, initial_idea)
+    await interaction.followup.send(f"🏗️ **Architecte Local initialisé pour :** *{idee}*")
+    
+    await generate_next_step(interaction, new_tree, idee)
 
-@bot.command()
-async def reset(ctx):
-    """Supprime complètement la session en cours."""
-    if ctx.author.id in active_trees:
-        del active_trees[ctx.author.id]
-        await ctx.send("🗑️ **Session effacée.** Tout est oublié. Tapez `!prompt` pour recommencer.")
+
+@bot.tree.command(name="reset", description="Effacer la session en cours et oublier le contexte")
+async def reset(interaction: discord.Interaction):
+    global_history.add("/reset", interaction.user.id)
+    
+    if interaction.user.id in active_trees:
+        del active_trees[interaction.user.id]
+        await interaction.response.send_message("🗑️ **Session effacée.** Tout est oublié.", ephemeral=True)
     else:
-        await ctx.send("❌ Aucune session à effacer.")
+        await interaction.response.send_message("❌ Aucune session à effacer.", ephemeral=True)
 
-@bot.command(name="speak")
-async def speak(ctx, *, topic):
-    """Permet de taper '!speak about X' ou '!speak X'."""
+
+@bot.tree.command(name="speak", description="Vérifier si un sujet a été abordé")
+@app_commands.describe(sujet="Le mot clé à chercher")
+async def speak(interaction: discord.Interaction, sujet: str):
+    global_history.add(f"/speak {sujet}", interaction.user.id)
     
-    if topic.lower().startswith("about "):
-        topic = topic[6:] # Coupe les 6 premiers caractères ("about ")
-
-    if ctx.author.id in active_trees:
-        tree = active_trees[ctx.author.id]
-        found = tree.search_topic(topic)
-        
+    if interaction.user.id in active_trees:
+        tree = active_trees[interaction.user.id]
+        found = tree.search_topic(sujet)
         if found:
-             await ctx.send(f"✅ Oui, nous avons parlé de **{topic}**.")
+             await interaction.response.send_message(f"✅ Oui, nous avons parlé de **{sujet}**.")
         else:
-             await ctx.send(f"❌ Non, **{topic}** n'a pas été mentionné.")
+             await interaction.response.send_message(f"❌ Non, **{sujet}** n'a pas été mentionné.")
     else:
-        await ctx.send("❌ Pas de session active.")
+        await interaction.response.send_message("❌ Pas de session active.")
 
-@bot.command()
-async def my_history(ctx):
-    cmds = global_history.get_all(ctx.author.id)
+
+@bot.tree.command(name="history", description="Voir mon historique de commandes")
+async def history(interaction: discord.Interaction):
+    global_history.add("/history", interaction.user.id)
+    
+    cmds = global_history.get_all(interaction.user.id)
     if cmds:
         msg = "\n".join(cmds)
         if len(msg) > 1900: msg = msg[:1900] + "..."
-        await ctx.send(f"📜 **Historique :**\n{msg}")
+        await interaction.response.send_message(f"📜 **Historique :**\n{msg}", ephemeral=True)
     else:
-        await ctx.send("📭 Vide.")
+        await interaction.response.send_message("📭 Historique vide.", ephemeral=True)
 
-@bot.command(aliases=['last'])
-async def last_cmd(ctx):
-    """Affiche la commande précédente (en ignorant la commande actuelle)."""
-    
-    # On récupère tout l'historique de l'utilisateur sous forme de liste
-    cmds = global_history.get_all(ctx.author.id)
-    
-    # On a besoin d'au moins 2 éléments pour avoir un "avant-dernier"
-    if len(cmds) >= 2:
-        # On prend l'élément à l'index -2 (l'avant-dernier)
-        previous_cmd = cmds[-2]
-        await ctx.send(f"🔙 **Commande précédente :** `{previous_cmd}`")
+
+@bot.tree.command(name="last", description="Afficher ma dernière commande")
+async def last(interaction: discord.Interaction):
+    cmds = global_history.get_all(interaction.user.id)
+    if cmds:
+        await interaction.response.send_message(f"🔙 **Dernière commande :** `{cmds[-1]}`")
     else:
-        # S'il n'y a que ["!last"], c'est qu'il n'y a pas d'historique avant
-        await ctx.send("📭 Pas d'historique avant cette commande.")
+        await interaction.response.send_message("📭 Vide.")
 
-@bot.command()
-async def clear_history(ctx):
+
+@bot.tree.command(name="clear_history", description="Vider tout mon historique")
+async def clear_history_cmd(interaction: discord.Interaction):
     global_history.clear()
-    await ctx.send("🗑️ Historique vidé.")
+    await interaction.response.send_message("🗑️ Historique vidé.", ephemeral=True)
 
-@bot.command()
-async def export(ctx):
-    if ctx.author.id not in active_trees: return await ctx.send("❌ Rien à exporter.")
-    tree = active_trees[ctx.author.id]
-    if not tree.current_node.is_conclusion: return await ctx.send("⚠️ Discussion pas finie.")
+
+@bot.tree.command(name="export", description="Télécharger le prompt final en fichier texte")
+async def export(interaction: discord.Interaction):
+    global_history.add("/export", interaction.user.id)
     
-    safe_name = sanitize_filename(f"prompt_{ctx.author.name}")
+    if interaction.user.id not in active_trees:
+        return await interaction.response.send_message("❌ Rien à exporter.", ephemeral=True)
+    
+    tree = active_trees[interaction.user.id]
+    if not tree.current_node.is_conclusion:
+        return await interaction.response.send_message("⚠️ Discussion pas finie.", ephemeral=True)
+    
+    safe_name = sanitize_filename(f"prompt_{interaction.user.name}")
     filename = f"{safe_name}.txt"
     with open(filename, "w", encoding='utf-8') as f:
         f.write(tree.current_node.question)
-    await ctx.send("📁 Fichier généré :", file=discord.File(filename))
+        
+    await interaction.response.send_message("📁 Fichier généré :", file=discord.File(filename))
     os.remove(filename)
 
-@bot.command()
-async def path(ctx):
-    if ctx.author.id not in active_trees: return await ctx.send("❌ Pas de session.")
-    tree = active_trees[ctx.author.id]
+
+@bot.tree.command(name="path", description="Visualiser l'arbre binaire de la conversation")
+async def path(interaction: discord.Interaction):
+    global_history.add("/path", interaction.user.id)
+    
+    if interaction.user.id not in active_trees:
+        return await interaction.response.send_message("❌ Pas de session.", ephemeral=True)
+        
+    tree = active_trees[interaction.user.id]
     node = tree.root
     path_str = "🌲 **Chemin parcouru (Arbre Binaire) :**\n"
     while node:
@@ -245,18 +239,25 @@ async def path(ctx):
         content = (node.question[:40] + '...') if len(node.question) > 40 else node.question
         path_str += f"⬇️ [{label}] {content}\n"
         node = node.left 
-    await ctx.send(f"```{path_str}```")
+    await interaction.response.send_message(f"```{path_str}```")
 
-@bot.command()
-async def status(ctx):
+
+@bot.tree.command(name="status", description="Vérifier l'état du bot et de LM Studio")
+async def status(interaction: discord.Interaction):
     active_users = len(active_trees)
-    # Petit check ping vers LM Studio
     try:
         client.models.list()
         state = "🟢 Connecté à LM Studio"
     except:
-        state = "🔴 LM Studio injoignable (Check port 1234)"
+        state = "🔴 LM Studio injoignable"
     
-    await ctx.send(f"**État du Bot :**\n{state}\nSessions actives : {active_users}")
+    await interaction.response.send_message(f"**État du Bot :**\n{state}\nSessions actives : {active_users}")
 
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    try:
+        bot.run(DISCORD_TOKEN)
+    except KeyboardInterrupt:
+        print("🛑 Arrêt manuel détecté (Ctrl+C).")
+    finally:
+        save_game_data(global_history, active_trees)
+        print("💾 Sauvegarde de fermeture effectuée.")

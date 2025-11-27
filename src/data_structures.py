@@ -44,6 +44,28 @@ class CommandHistory:
         self.head = None
         self.tail = None
 
+    def remove_user_history(self, user_id):
+        """
+        Supprime tous les noeuds appartenant à un utilisateur spécifique.
+        Gère la réassignation des pointeurs head et tail.
+        """
+        
+        while self.head and self.head.author_id == user_id:
+            self.head = self.head.next
+            if self.head is None:
+                self.tail = None
+                return
+
+        current = self.head
+        while current and current.next:
+            if current.next.author_id == user_id:
+                current.next = current.next.next
+                
+                if current.next is None:
+                    self.tail = current
+            else:
+                current = current.next
+
     def to_list_dict(self):
         data = []
         current = self.head

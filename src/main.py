@@ -88,9 +88,12 @@ async def generate_next_step(interaction_or_ctx, tree, user_input):
     }
     IMPORTANT : JUSTE LE JSON. PAS DE MARKDOWN AUTOUR DU JSON.
     """
+
+    root_context = tree.root.question if tree.root else "Non défini"
     
     messages = [
         {"role": "system", "content": system_instruction},
+        {"role": "user", "content": f"CONTEXTE GLOBAL DU PROJET (Ne l'oublie jamais) : {root_context}"},
         {"role": "user", "content": f"Question précédente : {tree.current_node.question}"},
         {"role": "user", "content": f"Réponse utilisateur : {user_input} (Si c'est la fin, formatte la réponse avec des titres Markdown # et ##)"}
     ]
@@ -105,20 +108,29 @@ async def generate_next_step(interaction_or_ctx, tree, user_input):
         
         raw_content = response.choices[0].message.content.strip()
         
-        if raw_content.startswith("```json"): raw_content = raw_content.replace("```json", "", 1)
-        if raw_content.startswith("```"): raw_content = raw_content.replace("```", "", 1)
-        if raw_content.endswith("```"): raw_content = raw_content[:-3]
-        raw_content = raw_content.strip()
-
         start_idx = raw_content.find('{')
-        end_idx = raw_content.rfind('}') + 1
         
-        if start_idx != -1 and end_idx != -1:
-            json_str = raw_content[start_idx:end_idx]
-            ai_data = json.loads(json_str)
+        if start_idx != -1:
+            balance = 0
+            end_idx = -1
+            
+            for i, char in enumerate(raw_content[start_idx:], start=start_idx):
+                if char == '{':
+                    balance += 1
+                elif char == '}':
+                    balance -= 1
+                    if balance == 0:
+                        end_idx = i + 1
+                        break
+            
+            if end_idx != -1:
+                json_str = raw_content[start_idx:end_idx]
+                ai_data = json.loads(json_str)
+            else:
+                raise ValueError("JSON incomplet (accolade fermante manquante).")
         else:
             print(f"ERREUR JSON BRUT : {raw_content}")
-            raise ValueError("JSON non détecté.")
+            raise ValueError("Aucun objet JSON trouvé.")
 
         new_node = TreeNode(question=ai_data['content'])
         
@@ -131,18 +143,16 @@ async def generate_next_step(interaction_or_ctx, tree, user_input):
             new_node.is_conclusion = True
             tree.current_node.left = new_node
             tree.current_node = new_node
-
+            
             final_text = ai_data['content']
             
             lines = final_text.split('\n')
             cleaned_lines = []
             for line in lines:
-                if line.strip().startswith("```"):
-                    continue
+                if line.strip().startswith("```"): continue
                 cleaned_lines.append(line)
-            
             final_text = "\n".join(cleaned_lines)
-
+            
             content_length = len(final_text)
             
             if content_length > 1900:
@@ -161,6 +171,7 @@ async def generate_next_step(interaction_or_ctx, tree, user_input):
                 await send_msg(text="Utilisez `/export` pour télécharger une copie.")
 
     except json.JSONDecodeError:
+        print(f"JSON ERROR content: {raw_content}")
         await send_msg(text="⚠️ **Erreur IA** : La réponse était mal formatée. Essaie de relancer.")
     except Exception as e:
         print(f"⚠️ Erreur : {e}")
@@ -230,15 +241,20 @@ async def prompt(interaction: discord.Interaction, idee: str):
     await generate_next_step(interaction, new_tree, idee)
 
 
-@bot.tree.command(name="reset", description="Effacer la session en cours et oublier le contexte")
+@bot.tree.command(name="reset", description="Effacer session ET historique (Remise à zéro)")
 async def reset(interaction: discord.Interaction):
-    global_history.add("/reset", interaction.user.id)
-    
+    deleted_session = False
     if interaction.user.id in active_trees:
         del active_trees[interaction.user.id]
-        await interaction.response.send_message("🗑️ **Session effacée.** Tout est oublié.", ephemeral=True)
-    else:
-        await interaction.response.send_message("❌ Aucune session à effacer.", ephemeral=True)
+        deleted_session = True
+
+    global_history.remove_user_history(interaction.user.id)
+    
+    msg = "🗑️ **Grand Nettoyage effectué.**\n"
+    msg += "- Session active : Effacée\n" if deleted_session else "- Session active : Aucune\n"
+    msg += "- Historique des commandes : Vidé de la base de données."
+    
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 @bot.tree.command(name="speak", description="Vérifier si un sujet a été abordé")

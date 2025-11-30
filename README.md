@@ -19,6 +19,10 @@ LMSTUDIO_URL=http://<lm-studio-host>:<port>/v1
 
 - **Important**: N'insérez jamais votre `DISCORD_TOKEN` dans le dépôt ou dans le `README`. L'URL de LM Studio peut changer si le serveur est arrêté/redémarré ; mettez à jour la valeur dans `.env` quand nécessaire.
 
+- **Faciliter l'installation**: Un fichier `.env.template` est fourni à la racine. Pour créer votre fichier `.env`, copiez simplement le template et remplissez les valeurs.
+
+Remplissez ensuite `DISCORD_TOKEN` et `LM_STUDIO_URL` dans le fichier `.env` avant d'exécuter le bot.
+
 **Données & sécurité**
 - **`data/`**: Le dossier sert à stocker les données sauvegardées localement. Il contient une entrée `.keep` pour maintenir la structure et des fichiers JSON (ex. `bot_data.json`).
 - **Exclusion Git**: Le fichier `.gitignore` du projet exclut `data/*.json`, `.env`, et autres fichiers sensibles. Cela permet de conserver des données et clés privées hors du dépôt public.
@@ -47,3 +51,7 @@ ou (depuis la racine)
 ```
 python src/main.py
 ```
+
+**Documentation détaillée**
+- La documentation complète (explication des commandes et captures d'écran) se trouve dans `doc/doc.md`.
+- Les images utilisées dans la documentation sont stockées dans `doc/img/`.

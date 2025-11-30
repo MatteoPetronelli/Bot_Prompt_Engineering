@@ -125,10 +125,11 @@ class DialogueTree:
         # On utilise une pile pour éviter la récursion ici aussi
         if not self.root: return False
         stack = [self.root]
+        keyword = keyword.lower()
         while stack:
             node = stack.pop()
-            if keyword.lower() in node.question.lower(): return True
-            if node.user_answer and keyword.lower() in node.user_answer.lower(): return True
+            if keyword in node.question.lower(): return True
+            if node.cause_answer and keyword in node.cause_answer.lower(): return True
             if node.right: stack.append(node.right)
             if node.left: stack.append(node.left)
         return False

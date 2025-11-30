@@ -132,52 +132,36 @@ async def generate_next_step(interaction_or_ctx, tree, user_input):
             print(f"ERREUR JSON BRUT : {raw_content}")
             raise ValueError("Aucun objet JSON trouvé.")
 
+        # --- LOGIQUE DE BRANCHEMENT (GAUCHE / DROITE) ---
         new_node = TreeNode(question=ai_data['content'])
+        new_node.parent = tree.current_node
+        new_node.cause_answer = user_input
+        
+        if tree.current_node.left is None:
+            tree.current_node.left = new_node
+            branch_msg = ""
+            
+        elif tree.current_node.right is None:
+            tree.current_node.right = new_node
+            branch_msg = " 🔀 **(Nouvelle branche créée à Droite)**"
+            
+        else:
+            tree.current_node.left = new_node
+            branch_msg = " ⚠️ **(Branche Gauche écrasée)**"
+
+        tree.current_node = new_node
         
         if ai_data['type'] == 'question':
-            tree.current_node.left = new_node
-            tree.current_node = new_node
-            await send_msg(text=f"🤖 **Question :** {ai_data['content']}")
+            await send_msg(text=f"🤖 **Question :** {ai_data['content']}{branch_msg}")
             
         elif ai_data['type'] == 'conclusion':
             new_node.is_conclusion = True
-            tree.current_node.left = new_node
-            tree.current_node = new_node
-            
-            final_text = ai_data['content']
-            
-            lines = final_text.split('\n')
-            cleaned_lines = []
-            for line in lines:
-                if line.strip().startswith("```"): continue
-                cleaned_lines.append(line)
-            final_text = "\n".join(cleaned_lines)
-            
-            content_length = len(final_text)
-            
-            if content_length > 1900:
-                filename = "prompt_final.md"
-                with open(filename, "w", encoding='utf-8') as f:
-                    f.write(final_text)
-                
-                await send_msg(
-                    text="✨ **Prompt Final Généré !**\n(Le résultat est long, voir fichier Markdown ci-joint)",
-                    file=discord.File(filename)
-                )
-                os.remove(filename)
-            else:
-                embed = discord.Embed(title="✨ Prompt Final", description=final_text, color=0x00ff00)
-                await send_msg(embed=embed)
-                await send_msg(text="Utilisez `/export` pour télécharger une copie.")
+            embed = discord.Embed(title="✨ Prompt Final", description=ai_data['content'][:4000], color=0x00ff00)
+            await send_msg(embed=embed)
+            await send_msg(text=f"Utilisez `/export` pour télécharger.{branch_msg}")
 
     except json.JSONDecodeError:
         print(f"JSON ERROR content: {raw_content}")
-        await send_msg(text="⚠️ **Erreur IA** : La réponse était mal formatée. Essaie de relancer.")
-    except Exception as e:
-        print(f"⚠️ Erreur : {e}")
-        await send_msg(text=f"⚠️ Erreur technique IA ({e}).")
-
-    except json.JSONDecodeError:
         await send_msg(text="⚠️ **Erreur IA** : La réponse était mal formatée. Essaie de relancer.")
     except Exception as e:
         print(f"⚠️ Erreur : {e}")
@@ -216,7 +200,6 @@ async def on_message(message):
                     if tree.current_node.is_conclusion:
                         tree.current_node.is_conclusion = False
                     
-                    tree.current_node.user_answer = message.content
                     await generate_next_step(message.channel, tree, message.content)
                 return
 
@@ -321,7 +304,7 @@ async def export(interaction: discord.Interaction):
     os.remove(filename)
 
 
-@bot.tree.command(name="path", description="Visualiser l'arbre complet sans coupure")
+@bot.tree.command(name="path", description="Visualiser l'arbre complet avec branches")
 async def path(interaction: discord.Interaction):
     global_history.add("/path", interaction.user.id)
     
@@ -330,42 +313,128 @@ async def path(interaction: discord.Interaction):
         
     tree = active_trees[interaction.user.id]
     
-    def build_tree_text(node, level=0):
-        if not node:
-            return ""
-            
-        indent = "  " * level
-        if node.is_conclusion:
-            icon = "🏁 [FIN]"
-        elif level == 0:
-            icon = "🌱 [RACINE]"
-        else:
-            icon = "👇 [ETAPE]"
+    lines = []
+    stack = [(tree.root, 0, "🌱")] if tree.root else []
+    visited_ids = set()
+    MAX_NODES = 1000
+
+    while stack:
+        node, level, prefix = stack.pop()
+        
+        if len(lines) > MAX_NODES: break
+        if id(node) in visited_ids: continue
+        visited_ids.add(id(node))
+
+        indent = "   " * level
+        
+        position_marker = " 📍 VOUS ÊTES ICI" if node == tree.current_node else ""
         
         clean_q = node.question.replace('\n', ' ')
+        if len(clean_q) > 60: clean_q = clean_q[:57] + "..."
         
-        text = f"{indent}{icon} BOT: {clean_q}\n"
+        if node.cause_answer:
+            clean_a = node.cause_answer.replace('\n', ' ')
+            if len(clean_a) > 60: clean_a = clean_a[:57] + "..."
+            lines.append(f"{indent}└─👤 USER: {clean_a}")
         
-        if node.user_answer:
-            clean_a = node.user_answer.replace('\n', ' ')
-            text += f"{indent}  👤 USER: {clean_a}\n"
-            
-        text += build_tree_text(node.left, level + 1)
-        text += build_tree_text(node.right, level + 1)
-        return text
+        lines.append(f"{indent}{prefix} BOT: {clean_q}{position_marker}")
 
-    full_tree_str = build_tree_text(tree.root)
+        if node.right:
+            stack.append((node.right, level + 1, "👉 [BRANCHE B]"))
+        if node.left:
+            stack.append((node.left, level + 1, "👇 [BRANCHE A]"))
+
+    full_tree_str = "\n".join(lines)
     
     if len(full_tree_str) > 1900:
-        with open("tree_view.md", "w", encoding="utf-8") as f:
+        with open("tree_view.txt", "w", encoding="utf-8") as f:
             f.write(full_tree_str)
-        await interaction.response.send_message(
-            "🌳 **L'arbre est complet !**\nComme je ne coupe plus le texte, c'est trop long pour le chat.\nVoici le fichier complet :", 
-            file=discord.File("tree_view.md")
-        )
-        os.remove("tree_view.md")
+        await interaction.response.send_message("🌳 Arbre complet (fichier joint) :", file=discord.File("tree_view.txt"))
+        os.remove("tree_view.txt")
     else:
-        await interaction.response.send_message(f"```md\n{full_tree_str}\n```")
+        await interaction.response.send_message(f"```text\n{full_tree_str}\n```")
+
+@bot.tree.command(name="navigate", description="Se déplacer dans l'arbre (Haut, Bas-Gauche, Bas-Droite)")
+@app_commands.describe(direction="Où aller ?", etapes="Nombre d'étapes (Défaut: 1)")
+@app_commands.choices(direction=[
+    app_commands.Choice(name="⬆️ Reculer (Vers la racine)", value="back"),
+    app_commands.Choice(name="↙️ Avancer Gauche (Branche A / Principale)", value="left"),
+    app_commands.Choice(name="↘️ Avancer Droite (Branche B / Alternative)", value="right")
+])
+async def navigate(interaction: discord.Interaction, direction: app_commands.Choice[str], etapes: int = 1):
+    global_history.add(f"/navigate {direction.value} {etapes}", interaction.user.id)
+    
+    if interaction.user.id not in active_trees:
+        return await interaction.response.send_message("❌ Pas de session active.", ephemeral=True)
+    
+    if etapes <= 0:
+        return await interaction.response.send_message("⚠️ Le nombre d'étapes doit être au moins 1.", ephemeral=True)
+
+    tree = active_trees[interaction.user.id]
+    target_node = tree.current_node
+    moved_count = 0
+    blocked_reason = ""
+
+    # --- Logique de déplacement ---
+    for _ in range(etapes):
+        
+        if direction.value == "back":
+            if target_node.parent:
+                target_node = target_node.parent
+                moved_count += 1
+            else:
+                blocked_reason = " (Racine atteinte)"
+                break 
+    
+        elif direction.value == "left":
+            if target_node.left:
+                target_node = target_node.left
+                moved_count += 1
+            else:
+                blocked_reason = " (Pas de branche à Gauche ici)"
+                break
+
+        elif direction.value == "right":
+            if target_node.right:
+                target_node = target_node.right
+                moved_count += 1
+            else:
+                blocked_reason = " (Pas de branche à Droite ici)"
+                break
+
+    tree.current_node = target_node
+
+    if moved_count == 0:
+        await interaction.response.send_message(f"🛑 **Impossible de bouger.**{blocked_reason}", ephemeral=True)
+    else:
+        if direction.value == "back": arrow = "⬆️"
+        elif direction.value == "left": arrow = "↙️"
+        else: arrow = "↘️"
+
+        msg = f"{arrow} **Déplacement effectué ({moved_count} étapes).**\n\n"
+        
+        if target_node.is_conclusion:
+            preview = target_node.question.replace('\n', ' ')[:100]
+            msg += f"🏁 **[CONCLUSION]** {preview}..."
+        else:
+            msg += f"🤖 **[QUESTION]** {target_node.question}"
+            
+            has_history = False
+            
+            if target_node.left:
+                msg += f"\n\n↙️ **Réponse Gauche (Existante) :** `{target_node.left.cause_answer}`"
+                has_history = True
+                
+            if target_node.right:
+                msg += f"\n↘️ **Réponse Droite (Existante) :** `{target_node.right.cause_answer}`"
+                has_history = True
+                
+            if not has_history:
+                msg += f"\n\n✍️ **Aucune réponse enregistrée.** Tapez votre message."
+            else:
+                msg += f"\n\n✍️ *Tapez un nouveau message pour créer une nouvelle branche ou écraser la Gauche.*"
+
+        await interaction.response.send_message(msg)
 
 @bot.tree.command(name="status", description="Vérifier l'état du bot et de LM Studio")
 async def status(interaction: discord.Interaction):

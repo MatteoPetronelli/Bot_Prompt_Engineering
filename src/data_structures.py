@@ -1,82 +1,5 @@
 # ==========================================
-# PARTIE 1 : LISTE CHAÎNÉE (Historique)
-# ==========================================
-
-class HistoryNode:
-    def __init__(self, command, author_id):
-        self.command = command
-        self.author_id = author_id
-        self.next = None
-
-class CommandHistory:
-    def __init__(self):
-        self.head = None
-        self.tail = None
-
-    def add(self, command, author_id):
-        new_node = HistoryNode(command, author_id)
-        if not self.head:
-            self.head = new_node
-            self.tail = new_node
-        else:
-            self.tail.next = new_node
-            self.tail = new_node
-
-    def get_last(self, author_id):
-        current = self.head
-        last_found = None
-        while current is not None:
-            if current.author_id == author_id:
-                last_found = current.command
-            current = current.next
-        return last_found
-
-    def get_all(self, author_id):
-        result = []
-        current = self.head
-        while current is not None:
-            if current.author_id == author_id:
-                result.append(current.command)
-            current = current.next
-        return result
-
-    def clear(self):
-        self.head = None
-        self.tail = None
-
-    def remove_user_history(self, user_id):
-        """
-        Supprime tous les noeuds appartenant à un utilisateur spécifique.
-        Gère la réassignation des pointeurs head et tail.
-        """
-        
-        while self.head and self.head.author_id == user_id:
-            self.head = self.head.next
-            if self.head is None:
-                self.tail = None
-                return
-
-        current = self.head
-        while current and current.next:
-            if current.next.author_id == user_id:
-                current.next = current.next.next
-                
-                if current.next is None:
-                    self.tail = current
-            else:
-                current = current.next
-
-    def to_list_dict(self):
-        data = []
-        current = self.head
-        while current is not None:
-            data.append({"cmd": current.command, "user": current.author_id})
-            current = current.next
-        return data
-
-
-# ==========================================
-# PARTIE 2 : ARBRE BINAIRE (Sessions)
+# ARBRE BINAIRE (Sessions)
 # ==========================================
 
 class TreeNode:
@@ -133,6 +56,45 @@ class DialogueTree:
             if node.right: stack.append(node.right)
             if node.left: stack.append(node.left)
         return False
+    
+    # --- PATH ---
+    def get_visualization(self):
+        """Génère la représentation textuelle de l'arbre (String)."""
+        if not self.root:
+            return "Arbre vide."
+
+        lines = []
+        stack = [(self.root, 0, "🌱")]
+        visited_ids = set()
+        MAX_NODES = 1000
+
+        while stack:
+            node, level, prefix = stack.pop()
+            
+            if len(lines) > MAX_NODES: break
+            if id(node) in visited_ids: continue
+            visited_ids.add(id(node))
+
+            indent = "   " * level
+            
+            position_marker = " 📍 VOUS ÊTES ICI" if node == self.current_node else ""
+            
+            clean_q = node.question.replace('\n', ' ')
+            if len(clean_q) > 60: clean_q = clean_q[:57] + "..."
+
+            if node.cause_answer:
+                clean_a = node.cause_answer.replace('\n', ' ')
+                if len(clean_a) > 60: clean_a = clean_a[:57] + "..."
+                lines.append(f"{indent}└─👤 USER: {clean_a}")
+
+            lines.append(f"{indent}{prefix} BOT: {clean_q}{position_marker}")
+
+            if node.right:
+                stack.append((node.right, level + 1, "👉 [BRANCHE B]"))
+            if node.left:
+                stack.append((node.left, level + 1, "👇 [BRANCHE A]"))
+
+        return "\n".join(lines)
 
     # --- SÉRIALISATION ITÉRATIVE (FLAT) ---
     def to_dict(self):

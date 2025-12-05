@@ -1,0 +1,8 @@
+1/ Amélioration "Mémoire" : Les Préférences Utilisateur
+    Actuellement, le bot ne "connaît" pas l'utilisateur. Il faut répéter "Fais-le en Français" ou "Format Markdown" à chaque fois.
+    Base de données : Une table user_settings (user_id, language, default_format, tone_preference).
+    Commande : /settings set language:"Français" format:"Markdown".
+    Intégration : Dans generate_next_step, tu injectes ces préférences dans le bloc system_instruction.
+    "Note : L'utilisateur préfère toujours des réponses en Français et au format Markdown."
+    Cela rend l'expérience beaucoup plus fluide et personnalisée.
+2/

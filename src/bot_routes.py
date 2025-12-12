@@ -157,8 +157,7 @@ async def export(interaction: discord.Interaction):
     await interaction.response.send_message("📁 Fichier généré :", file=discord.File(filename))
     os.remove(filename)
 
-
-@bot.tree.command(name="path", description="Visualiser l'arbre complet")
+@bot.tree.command(name="path", description="Visualiser l'arbre graphiquement")
 async def path(interaction: discord.Interaction):
     add_history(interaction.user.id, "/path")
 
@@ -169,14 +168,24 @@ async def path(interaction: discord.Interaction):
 
     tree = active_trees[interaction.user.id]
     
-    full_tree_str = tree.get_visualization()
+    await interaction.response.defer()
+    filename_base = f"tree_{interaction.user.id}"
     
-    if len(full_tree_str) > 1900:
-        with open("tree.txt", "w", encoding="utf-8") as f: f.write(full_tree_str)
-        await interaction.response.send_message("🌳 Arbre complet :", file=discord.File("tree.txt"))
-        os.remove("tree.txt")
+    image_path = tree.generate_graph_image(filename_base)
+
+    view = TreeControlView(tree, interaction.user.id)
+    
+    if image_path and os.path.exists(image_path):
+        file = discord.File(image_path, filename="tree_visualization.png")
+        embed = discord.Embed(title="🗺️ Carte de votre discussion", color=0x3498db)
+        embed.set_image(url="attachment://tree_visualization.png")
+        embed.set_footer(text="📍 Rouge = Votre position actuelle | 🟦 Bleu = Branche A | 🟧 Orange = Branche B")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+        
+        os.remove(image_path)
     else:
-        await interaction.response.send_message(f"```text\n{full_tree_str}\n```")
+        await interaction.followup.send("⚠️ Impossible de générer l'image (Graphviz manquant ?), mais voici les commandes :", view=view)
 
 @bot.tree.command(name="navigate", description="Se déplacer dans l'arbre (Haut, Bas-Gauche, Bas-Droite)")
 @app_commands.describe(direction="Où aller ?", etapes="Nombre d'étapes (Défaut: 1)")

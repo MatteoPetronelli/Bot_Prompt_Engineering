@@ -1,3 +1,7 @@
+from graphviz import Digraph
+import os
+import textwrap
+
 # ==========================================
 # ARBRE BINAIRE (Sessions)
 # ==========================================
@@ -95,6 +99,93 @@ class DialogueTree:
                 stack.append((node.left, level + 1, "👇 [BRANCHE A]"))
 
         return "\n".join(lines)
+    
+    # --- GENERATION D'IMAGE ---
+    def generate_graph_image(self, filename_base="tree_viz"):
+        """
+        Génère une image PNG de l'arbre avec Graphviz.
+        Optimisé pour des textes longs, centrés et lisibles.
+        """
+        if not self.root:
+            return None
+
+        dot = Digraph(comment='Dialogue Tree', format='png', graph_attr={'dpi': '300'})
+        
+        dot.attr(rankdir='TB', bgcolor='#2C2F33') # Fond sombre style Discord
+        
+        dot.attr('node', 
+            shape='box',
+            style='filled,rounded',
+            color='#23272A',
+            fillcolor='#FFFFFF',
+            fontname='Helvetica, Arial, sans-serif',
+            fontsize='14',
+            margin='0.3,0.1',
+            height='0.6'
+        )
+        
+        dot.attr('edge', 
+            fontname='Helvetica, Arial, sans-serif',
+            fontsize='12',
+            color='#99AAB5',
+            fontcolor='#FFFFFF'
+        )
+
+        def format_label(text, width=40):
+            return "\\n".join(textwrap.wrap(text, width=width))
+
+        stack = [self.root]
+        visited_ids = set()
+
+        while stack:
+            node = stack.pop()
+            node_id = str(id(node))
+
+            if node_id in visited_ids: continue
+            visited_ids.add(node_id)
+
+            clean_q = node.question.replace('\n', ' ')
+            wrapped_label = format_label(clean_q, width=40)
+
+            fillcolor = '#FFFFFF'
+            penwidth = '1'
+            fontcolor = 'black'
+
+            if node == self.current_node:
+                fillcolor = '#FFCCCB'
+                penwidth = '4'
+                wrapped_label = "📍 VOUS ÊTES ICI\\n\\n" + wrapped_label
+            elif node.is_conclusion:
+                fillcolor = '#E8F5E9'
+
+            dot.node(node_id, label=wrapped_label, fillcolor=fillcolor, penwidth=penwidth, fontcolor=fontcolor)
+
+            if node.left:
+                child_id = str(id(node.left))
+                raw_label = node.left.cause_answer if node.left.cause_answer else "Start"
+                edge_label = f"A: {format_label(raw_label, width=25)}"
+                
+                dot.edge(node_id, child_id, label=edge_label, color='#0096FF', fontcolor='#0096FF')
+                stack.append(node.left)
+
+            if node.right:
+                child_id = str(id(node.right))
+                raw_label = node.right.cause_answer if node.right.cause_answer else "???"
+                edge_label = f"B: {format_label(raw_label, width=25)}"
+
+                dot.edge(node_id, child_id, label=edge_label, color='#FF5733', fontcolor='#FF5733')
+                stack.append(node.right)
+
+        try:
+            output_path = dot.render(filename_base, view=False, cleanup=True, renderer='cairo')
+            return output_path
+        except Exception as e:
+            try:
+                 output_path = dot.render(filename_base, view=False, cleanup=True)
+                 return output_path
+            except Exception as e2:
+                 print(f"❌ Erreur Graphviz : {e2}")
+                 return None
 
     # --- SÉRIALISATION ITÉRATIVE (FLAT) ---
     def to_dict(self):
@@ -156,7 +247,7 @@ class DialogueTree:
         
         for n_data in nodes_data:
             node = TreeNode(n_data["q"], is_conclusion=n_data["end"])
-            node.cause_answer_answer = n_data["a"]
+            node.cause_answer = n_data.get("a")
             id_to_node[n_data["id"]] = node
             
         for n_data in nodes_data:

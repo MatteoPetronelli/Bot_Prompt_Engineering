@@ -84,7 +84,6 @@ class TreeControlView(discord.ui.View):
                 file=discord.File(filename), 
                 ephemeral=True
             )
-            import os
             os.remove(filename)
         else:
             await interaction.response.send_message(f"```text\n{full_tree_str}\n```", ephemeral=True)

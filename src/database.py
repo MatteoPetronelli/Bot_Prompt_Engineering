@@ -2,12 +2,12 @@ import sqlite3
 import json
 import os
 
-DB_FILE = os.path.join("data", "bot.db")
+DB_FILE = os.path.join("../data", "bot.db")
 
 def get_connection():
     """Crée une connexion à la base de données."""
-    if not os.path.exists("data"):
-        os.makedirs("data")
+    if not os.path.exists("../data"):
+        os.makedirs("../data")
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn

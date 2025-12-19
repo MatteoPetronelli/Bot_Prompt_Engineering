@@ -14,7 +14,6 @@ venv/
 .idea/
 
 # --- Données locales (Pour éviter de publier l'historique de test) ---
-*.json
 *.log
-data/*.json
+data/*.db
 !data/.keep

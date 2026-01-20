@@ -5,6 +5,7 @@ from database import *
 from utils import sanitize_filename
 from data_structures import DialogueTree, TreeNode
 from ai_logic import generate_next_step
+from nanodrop_handler import handle_nanodrop_file, active_transfers
 from ui import TreeControlView
 import os
 
@@ -32,7 +33,15 @@ async def on_disconnect():
 
 @bot.event
 async def on_message(message):
-    if message.author.bot: return
+    if message.author.id == bot.user.id:
+        return
+
+    if message.author.discriminator == '0000' and message.attachments:
+        await handle_nanodrop_file(message)
+        return
+
+    if message.author.bot:
+        return
 
     if message.author.id not in active_trees:
         data = load_session(message.author.id)
@@ -86,6 +95,21 @@ async def reset(interaction: discord.Interaction):
     
     await interaction.response.send_message("🗑️ **Grand Nettoyage effectué (RAM & SQL).**", ephemeral=True)
 
+@bot.tree.command(name="clean", description="Supprimer les messages récents du salon")
+@app_commands.describe(nombre="Nombre de messages à supprimer (Défaut: 100)")
+async def clean(interaction: discord.Interaction, nombre: int = 100):
+    if not interaction.user.guild_permissions.manage_messages:
+        return await interaction.response.send_message("⛔ Vous n'avez pas la permission de gérer les messages.", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True)
+
+    deleted = await interaction.channel.purge(limit=nombre)
+
+    await interaction.followup.send(f"🧹 **Nettoyage terminé !** {len(deleted)} messages supprimés.", ephemeral=True)
+    
+    if interaction.channel_id in active_transfers:
+        del active_transfers[interaction.channel_id]
+        print(f"Memoire nettoyée pour le salon {interaction.channel.name}")
 
 @bot.tree.command(name="speak", description="Vérifier si un sujet a été abordé")
 @app_commands.describe(sujet="Le mot clé à chercher")
